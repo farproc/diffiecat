@@ -28,7 +28,8 @@
 #include <stdio.h>
 #include <strings.h>
 
-#define KEY_SIZE        ( 128 )
+//#define KEY_SIZE        ( 128 )
+#define KEY_SIZE        ( 256 )
 
 typedef unsigned char u;
 
