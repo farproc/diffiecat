@@ -26,6 +26,7 @@
  */
 
 #include <stdio.h>
+#include <strings.h>
 
 #define KEY_SIZE        ( 128 )
 
@@ -114,7 +115,7 @@ void p(u *x)
 }
 
 
-void main(int c, char **v)
+int main(int c, char **v)
 {
     h(v[1], g);
     h(v[2], e);
