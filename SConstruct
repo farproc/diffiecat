@@ -7,4 +7,9 @@ if ARGUMENTS.get('debug', 0):
 
 env.Program(            target = 'diffie',
                         source = ['src/diffie.c'] )
-                        
+
+env.Program(            target = 'mydiffie',
+                        source = ['src/openssl_diffie.c'],
+                        LIBS   = ['crypto'] )
+
+
