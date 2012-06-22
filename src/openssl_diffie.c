@@ -221,19 +221,6 @@ int main( int argc, char *argv[] )
     }
     
 
-    // int DH_size(const DH *dh); 
-    // int DH_compute_key(unsigned char *key, BIGNUM *pub_key, DH *dh);
-    //
-    // key should be DH_size long
-
-
-
-    /*
-    printf( "[i]\tGenerating Bob's DH structures.\n" );
-    pBob   = DH_generate_parameters( nPrime, nGenerator, NULL, NULL );
-    */
-
-
     if( pAlice )
     {
             DH_free( pAlice );
