@@ -12,4 +12,7 @@ env.Program(            target = 'opendiffie',
                         source = ['src/openssl_diffie.c'],
                         LIBS   = ['crypto'] )
 
+env.Program(            target = 'diffieclient',
+                        source = ['src/diffie_client.c'],
+                        LIBS   = ['crypto'] )
 
