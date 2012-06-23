@@ -1,4 +1,6 @@
 #include <openssl/dh.h>
+#include <openssl/sha.h>
+#include <openssl/aes.h>
 #include <openssl/bn.h>
 #include <openssl/engine.h>
 
@@ -35,7 +37,6 @@ int main( int argc, char *argv[] )
     nPrime      = DIFFIE_BIT_LENGTH;
     nGenerator  = DIFFIE_GENERATOR;
 
-    printf( "[i]\tgenerating Alice's DH structures.\n" );
 #if defined( USE_GENERATED_PARAMS )
     pAlice = DH_new();
     if( pAlice )
@@ -151,19 +152,20 @@ int main( int argc, char *argv[] )
     // generating our own DH parameters  - which is very expensive, but cool.
     pAlice = DH_generate_parameters( nPrime, nGenerator, NULL, NULL );
 #endif
-    printf( "[i]\tdone.\n" );
 
     // pAlice has p & g
 
     if( pAlice )
     {
-        printf( "[i]\tgenerating key\n" );
+        printf( "[i]\talice: generating key...." );
+        fflush( stdout );
         DH_generate_key( pAlice );
-        printf( "[i]\tdone.\n" );
+        printf( "done.\n" );
     }
 
     // we now have public and private keys
-    
+   
+#ifdef USE_PKCS3 
     // encode them to forward to bob (as PKCS - if Bob just knew
     // what group/params we wouldn't need to do this)
     pBob     = DH_new();
@@ -173,12 +175,24 @@ int main( int argc, char *argv[] )
         printf( "[i]\tPKCS#3 size: %d\n", nPKCSLen );
         pBob = d2i_DHparams( &pBob, &pPKCSBuf, nPKCSLen );
     }
+#else
+    // assume bob knows what group Alice is using
+    pBob    = DH_new();
+    if( pBob )
+    {
+            pBob->p = BN_dup( pAlice->p );
+            pBob->g = BN_dup( pAlice->g );
+    }
+#endif
 
     if( pBob )
     {
-            // pBob has p & g. but no pub yet
-            DH_generate_key( pBob );
-            // bob now has pub and private keys
+        // pBob has p & g. but no pub yet
+        printf( "[i]\tbob:   generating key...." );
+        fflush( stdout );
+        DH_generate_key( pBob );
+        printf( "done.\n" );
+        // bob now has pub and private keys
     }
 
     if( pAlice && pAlice->pub_key )
@@ -187,8 +201,10 @@ int main( int argc, char *argv[] )
     }
     if( pBob && pBob->pub_key )
     {
-            printf( "[i]\tbob's public key: %s\n", BN_bn2hex( pBob->pub_key ) );
+            printf( "[i]\tbob's   public key: %s\n", BN_bn2hex( pBob->pub_key ) );
     }
+
+    // alice and bob exchange public keys
 
     if( pAlice && pBob )
     {
@@ -210,10 +226,36 @@ int main( int argc, char *argv[] )
 
             if( pSharedKeyAlice && pSharedKeyBob && nSharedKeyAlice == nSharedKeyBob )
             {
-                    printf( "[i] shared key length: %d\n", nSharedKeyBob );
+                    printf( "[i]\tshared key length: %d\n", nSharedKeyBob );
                     if( 0 == memcmp( pSharedKeyAlice, pSharedKeyBob, nSharedKeyBob ) )
                     {
+                            BIGNUM  *pSharedKeyBN = BN_bin2bn( pSharedKeyAlice, nSharedKeyAlice, NULL );
+
                             printf( "[i]\tshared keys match\n" );
+                            if( pSharedKeyBN )
+                            {
+                                printf( "[i]\tshared key: %s\n", BN_bn2hex( pSharedKeyBN ) );
+                                BN_free( pSharedKeyBN );
+                            }
+
+                            // who needs a key that big!! - why not hash it down to 256bits
+                            {
+                                    SHA256_CTX      ctx                         = { 0 };
+                                    unsigned char   pHash[SHA256_DIGEST_LENGTH] = { 0 };
+                                    BIGNUM         *pOutput                     = NULL;
+
+                                    SHA256_Init( &ctx );
+                                    SHA256_Update( &ctx, pSharedKeyAlice, nSharedKeyAlice );
+                                    SHA256_Final( pHash, &ctx );
+
+                                    pOutput = BN_bin2bn( pHash, SHA256_DIGEST_LENGTH, NULL );
+                                    if( pOutput )
+                                    {
+                                            printf( "[i]\thashed key: %s\n", BN_bn2hex( pOutput ) );
+
+                                            BN_free( pOutput );
+                                    }
+                            }
                     } else {
                             printf( "[i]\tshared keys DON\'T  match\n" );
                     }
