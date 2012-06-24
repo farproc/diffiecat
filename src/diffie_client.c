@@ -1,9 +1,206 @@
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+#include <strings.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+
+// crypto
 #include <openssl/dh.h>
 #include <openssl/sha.h>
 #include <openssl/aes.h>
 #include <openssl/bn.h>
 #include <openssl/engine.h>
 
+// readline
+#include <readline/history.h>
+#include <readline/readline.h>
+
+typedef struct args_t
+{
+    bool        bServer;
+    uint16_t    nPort;
+    uint32_t    nAddress;
+} ARGS;
+
+bool parseArgs( ARGS *pArg, int argc, char *argv[] )
+{
+    bool    bRetVal = false;
+    int     i       = 0;
+    char   *pPtr    = NULL;
+
+    if( pArg && 3 == argc && argv )
+    {
+            if(        0 == strcmp( argv[1], "-client" ) )
+            {
+                // client
+                pArg->bServer   = false;
+                pPtr            = strtok( argv[2], ":" );
+                pArg->nAddress  = inet_addr( pPtr );
+                pPtr            = strtok( NULL, ":" );
+                pArg->nPort     = atoi( pPtr );
+                bRetVal         = true;
+            } else if( 0 == strcmp( argv[1], "-server" ) )
+            {
+                // server
+                pArg->bServer   = true;
+                pArg->nPort     = atoi( argv[2] );
+                bRetVal         = true;
+            }
+    }
+    return bRetVal;
+}
+
+int getNetworkConnection( ARGS *pArgs )
+{
+        int                 nRetVal     = -1,
+                            nClientSock =  0,
+                            clilen      =  0;
+        struct sockaddr_in  serv_addr   = { 0 },
+                            cli_addr    = { 0 };
+
+        if( pArgs )
+        {
+            // default to a server setup
+            serv_addr.sin_family        = AF_INET;
+            serv_addr.sin_port          = htons( pArgs->nPort );
+            serv_addr.sin_addr.s_addr   = INADDR_ANY;
+            nRetVal                     = socket( PF_INET, SOCK_STREAM, 0 );
+
+            if( pArgs->bServer )
+            {
+                // TODO: check your return values!
+                bind( nRetVal, (struct sockaddr *) &serv_addr, sizeof(serv_addr) );
+                listen( nRetVal, 5 );
+
+                // accept loop
+                while( true )
+                {
+                    clilen = sizeof(cli_addr);
+
+                    printf( "[i]\twaiting for connection......" );
+                    fflush( stdout );
+
+                    nClientSock = accept( nRetVal, (struct sockaddr *) &cli_addr, &clilen);
+
+                    printf( "got one.\n" );
+
+                    if( 0 == fork() )
+                    {
+                        // child
+                        nRetVal = nClientSock;
+                        break;
+                    } else {
+                        // parent - accept more connections
+                    }
+                }
+            } else {
+                // we're use cli instead of serv as it reads better
+                cli_addr                = serv_addr;
+                cli_addr.sin_addr.s_addr= pArgs->nAddress;
+                
+                // TODO: more unchecked return values
+                connect( nRetVal, (struct sockaddr *) &cli_addr, sizeof( cli_addr ) );
+            }
+        }
+
+        return nRetVal;
+}
+
+char *stripwhite( char *string )
+{
+    char    *s  = NULL,
+            *t  = NULL;
+
+  for(s = string; isspace(*s); s++);
+    
+  if(*s == '\0')
+    return s;
+
+  t = s + strlen(s) - 1;
+
+  while( t > s && isspace (*t) )
+  {
+    t--;
+  }
+
+  *++t = '\0';
+
+  return s;
+}
+
+int enterCommandLoop( int s, char *pKey, int nKeyLen )
+{
+    int         nRetVal = EXIT_FAILURE; 
+    AES_KEY     sKey    = { 0 };
+    char        pPlain[  AES_BLOCK_SIZE ] = { 0 };
+    char        pCipher[ AES_BLOCK_SIZE ] = { 0 };
+
+    if( pKey && nKeyLen )
+    {
+        // use the same key in both directions
+        AES_set_encrypt_key( pKey, nKeyLen * 8, &sKey );
+        AES_set_decrypt_key( pKey, nKeyLen * 8, &sKey );
+
+        rl_initialize();
+
+        while( true )
+        {
+            char *line = readline(">");
+            char *ptr  = line;
+            int   len  = 0;
+
+            if( line )
+            {
+                line = stripwhite( line );
+                len  = strlen( line );
+
+                add_history( line );
+
+                while( len )
+                {
+                    bzero( pPlain,  AES_BLOCK_SIZE );
+                    bzero( pCipher, AES_BLOCK_SIZE );
+
+                    // fill the block with data
+                    memcpy( pPlain, ptr, ( len > AES_BLOCK_SIZE ) ? AES_BLOCK_SIZE : len );
+
+                    // work the AES magic
+                    AES_encrypt( pPlain, pCipher, &sKey );
+
+                    // send it on its way
+                    write( s, pCipher, AES_BLOCK_SIZE );
+                    printf( "[i]\tsent.\n" );
+
+                    if( len > AES_BLOCK_SIZE )
+                    {
+                        len -= AES_BLOCK_SIZE;
+                        ptr += AES_BLOCK_SIZE;
+                    } else {
+                        len  = 0;
+                    }
+                }
+
+                // send encrypted NULLs (end-of-message)
+                bzero( pPlain,  AES_BLOCK_SIZE );
+                bzero( pCipher, AES_BLOCK_SIZE );
+                AES_encrypt( pPlain, pCipher, &sKey );
+                write( s, pCipher, AES_BLOCK_SIZE );
+
+                printf( "[i]\tsent entire message.\n" );
+
+            } else {
+                printf( "[i]\tquiting...\n" );
+                break;
+            }
+        }
+    }
+
+    return nRetVal;
+}
 
 int main( int argc, char *argv[] )
 {
@@ -11,13 +208,28 @@ int main( int argc, char *argv[] )
     DH     *pMine       = NULL,
            *pTheirs     = NULL;
 
-    int     nTheirPublic= 0;
-    char    pTheirPublic[ 2048 ] = { 0 };
-
     int     nSharedKey  = 0;
     char*   pSharedKey  = NULL;
 
     char    pFoldedKey[ SHA256_DIGEST_LENGTH ] = { 0 };
+
+    ARGS    sArgs       = { 0 };
+    int     fdSock      = 0;
+
+
+    if( !parseArgs( &sArgs, argc, argv ) )
+    {
+            printf( "usage:\n%s\n"
+                            "\t-client <ip>:<port>\n"
+                            "\t-server <port>\n",
+                            argv[0] );
+            return EXIT_FAILURE;
+    }
+
+    // bind/connect
+    fdSock = getNetworkConnection( &sArgs );
+
+    printf( "[i]\tgot a connection\n" );
 
     // create diffie structures
     pMine   = DH_new();
@@ -73,14 +285,16 @@ int main( int argc, char *argv[] )
         pTheirs->p = BN_dup( pMine->p );
         pTheirs->g = BN_dup( pMine->g );
     }
-
     // pMine has p & g
 
     if( pMine )
     {
+        fprintf( stdout, "[i]\tgenerating key....." );
+        fflush( stdout );
         DH_generate_key( pMine );
+        fprintf( stdout, "done.\n" );
     } else {
-        fprintf( stderr, "[x]\tfailed to generate key.\n" );
+        fprintf( stdout, "[x]\tfailed to generate key.\n" );
         return EXIT_FAILURE;
     }
 
@@ -92,17 +306,28 @@ int main( int argc, char *argv[] )
     //
     // now push our public key
     //
-    fprintf( stdout, "%s\n", BN_bn2hex( pMine->pub_key ) );
+    pSharedKey = BN_bn2hex( pMine->pub_key ); // ( just reusing the var )
+    nSharedKey = strlen( pSharedKey );
+    printf( "[i]\tsending public key (%d)\n", nSharedKey );
+    write( fdSock, pSharedKey, nSharedKey );
 
     //
     // read in pTheirs public key
     //
-    fscanf( stdin, "%s\n", pTheirPublic );
+    bzero( pSharedKey, nSharedKey );
+    read( fdSock, pSharedKey, nSharedKey );
 
     //
     // parse in the public key
     //
-    BN_hex2bn( &(pTheirs->pub_key), pTheirPublic );
+    BN_hex2bn( &(pTheirs->pub_key), pSharedKey );
+
+    //
+    // free that temp buffer
+    //
+    OPENSSL_free( pSharedKey );
+    pSharedKey = NULL;
+    nSharedKey = 0;
 
     //
     // calculate shared key
@@ -122,6 +347,22 @@ int main( int argc, char *argv[] )
             SHA256_Init( &ctx );
             SHA256_Update( &ctx, pSharedKey, nSharedKey );
             SHA256_Final( pFoldedKey, &ctx );
+
+            fprintf( stdout, "[i]\tsuccesfully key-exchanged.\n" );
+
+            {
+                BIGNUM *pOutput = BN_bin2bn( pFoldedKey, sizeof( pFoldedKey ), NULL );
+                char   *pTextOut= BN_bn2hex( pOutput );
+                fprintf( stdout, "[i]\tshared key:\n%s\n", pTextOut );
+
+                OPENSSL_free( pTextOut );
+                BN_free( pOutput );
+            }
+
+
+            nRetVal = enterCommandLoop( fdSock, pFoldedKey, sizeof( pFoldedKey ) );
+
+            close( fdSock );
     }
 
 

@@ -14,5 +14,5 @@ env.Program(            target = 'opendiffie',
 
 env.Program(            target = 'diffieclient',
                         source = ['src/diffie_client.c'],
-                        LIBS   = ['crypto'] )
+                        LIBS   = ['crypto','readline'] )
 
