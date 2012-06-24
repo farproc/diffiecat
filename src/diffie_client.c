@@ -7,17 +7,15 @@
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/select.h>
+#include <fcntl.h>
 
 // crypto
 #include <openssl/dh.h>
 #include <openssl/sha.h>
-#include <openssl/aes.h>
+#include <openssl/rc4.h>
 #include <openssl/bn.h>
 #include <openssl/engine.h>
-
-// readline
-#include <readline/history.h>
-#include <readline/readline.h>
 
 typedef struct args_t
 {
@@ -81,13 +79,18 @@ int getNetworkConnection( ARGS *pArgs )
                 {
                     clilen = sizeof(cli_addr);
 
+#ifdef DEBUG_OUTPUT
                     printf( "[i]\twaiting for connection......" );
                     fflush( stdout );
+#endif
 
                     nClientSock = accept( nRetVal, (struct sockaddr *) &cli_addr, &clilen);
 
+#ifdef DEBUG_OUTPUT
                     printf( "got one.\n" );
+#endif
 
+#ifdef SUPPORT_MULTI_CLIENTS
                     if( 0 == fork() )
                     {
                         // child
@@ -96,6 +99,10 @@ int getNetworkConnection( ARGS *pArgs )
                     } else {
                         // parent - accept more connections
                     }
+#else
+                    nRetVal = nClientSock;
+                    break;
+#endif
                 }
             } else {
                 // we're use cli instead of serv as it reads better
@@ -110,91 +117,97 @@ int getNetworkConnection( ARGS *pArgs )
         return nRetVal;
 }
 
-char *stripwhite( char *string )
+void setnonblocking( int sock )
 {
-    char    *s  = NULL,
-            *t  = NULL;
+    int opts = 0;
 
-  for(s = string; isspace(*s); s++);
-    
-  if(*s == '\0')
-    return s;
+    opts = fcntl(sock,F_GETFL);
 
-  t = s + strlen(s) - 1;
+    if (opts < 0) {
+        perror("fcntl(F_GETFL)");
+        exit(EXIT_FAILURE);
+    }
 
-  while( t > s && isspace (*t) )
-  {
-    t--;
-  }
+    opts = (opts | O_NONBLOCK);
 
-  *++t = '\0';
+    if (fcntl(sock,F_SETFL,opts) < 0) {
+        perror("fcntl(F_SETFL)");
+        exit(EXIT_FAILURE);
+    }
 
-  return s;
+    return;
 }
 
+#define BUF_SIZE    ( 1024 )
 int enterCommandLoop( int s, char *pKey, int nKeyLen )
 {
     int         nRetVal = EXIT_FAILURE; 
-    AES_KEY     sKey    = { 0 };
-    char        pPlain[  AES_BLOCK_SIZE ] = { 0 };
-    char        pCipher[ AES_BLOCK_SIZE ] = { 0 };
+    RC4_KEY     sEKey   = { 0 };
+    RC4_KEY     sDKey   = { 0 };
+    char        pPlain[  BUF_SIZE ] = { 0 };
+    char        pCipher[ BUF_SIZE ] = { 0 };
 
     if( pKey && nKeyLen )
     {
-        // use the same key in both directions
-        AES_set_encrypt_key( pKey, nKeyLen * 8, &sKey );
-        AES_set_decrypt_key( pKey, nKeyLen * 8, &sKey );
+        setnonblocking( STDIN_FILENO );
+        setnonblocking( s            );
 
-        rl_initialize();
+        // use the same key in both directions
+        RC4_set_key( &sEKey, nKeyLen, pKey );
+        RC4_set_key( &sDKey, nKeyLen, pKey );
 
         while( true )
         {
-            char *line = readline(">");
-            char *ptr  = line;
-            int   len  = 0;
+            fd_set  set     = { 0 };
+            int     from    =  -1,
+            to      =  -1;
 
-            if( line )
+            FD_ZERO( &set );
+            FD_SET( STDIN_FILENO,  &set );
+            FD_SET( s,             &set );
+
+            if( 0 < select( s + 1, &set, NULL, NULL, NULL ) )
             {
-                line = stripwhite( line );
-                len  = strlen( line );
-
-                add_history( line );
-
-                while( len )
+                //
+                // somewhere a socket needs help!
+                //
+                if(        FD_ISSET( STDIN_FILENO,  &set ) )
                 {
-                    bzero( pPlain,  AES_BLOCK_SIZE );
-                    bzero( pCipher, AES_BLOCK_SIZE );
-
-                    // fill the block with data
-                    memcpy( pPlain, ptr, ( len > AES_BLOCK_SIZE ) ? AES_BLOCK_SIZE : len );
-
-                    // work the AES magic
-                    AES_encrypt( pPlain, pCipher, &sKey );
-
-                    // send it on its way
-                    write( s, pCipher, AES_BLOCK_SIZE );
-                    printf( "[i]\tsent.\n" );
-
-                    if( len > AES_BLOCK_SIZE )
-                    {
-                        len -= AES_BLOCK_SIZE;
-                        ptr += AES_BLOCK_SIZE;
-                    } else {
-                        len  = 0;
-                    }
+                    // stdin -> socket
+                    from = STDIN_FILENO;
+                    to   = s;
+                } else if( FD_ISSET( s,             &set ) )
+                {
+                    // socket -> stdout
+                    from = s;
+                    to   = STDOUT_FILENO;
                 }
+            }
+            
+            if( -1 != from && -1 != to )
+            {
+                ssize_t len = 0;
 
-                // send encrypted NULLs (end-of-message)
-                bzero( pPlain,  AES_BLOCK_SIZE );
-                bzero( pCipher, AES_BLOCK_SIZE );
-                AES_encrypt( pPlain, pCipher, &sKey );
-                write( s, pCipher, AES_BLOCK_SIZE );
+                // clear our buffers
+                bzero( pPlain,  BUF_SIZE );
+                bzero( pCipher, BUF_SIZE );
 
-                printf( "[i]\tsent entire message.\n" );
+                len = read( from, pPlain, BUF_SIZE );
 
-            } else {
-                printf( "[i]\tquiting...\n" );
-                break;
+                if( len )
+                {
+                    RC4(
+                        ( to == s ) ? &sEKey : &sDKey, // use the right key
+                        len,
+                        pPlain,
+                        pCipher );
+
+                    write( to, pCipher, len );
+                    fsync( to );
+                } else {
+                    // probably EOF
+                    break;
+                }
             }
         }
     }
@@ -229,7 +242,9 @@ int main( int argc, char *argv[] )
     // bind/connect
     fdSock = getNetworkConnection( &sArgs );
 
+#ifdef DEBUG_OUTPUT
     printf( "[i]\tgot a connection\n" );
+#endif
 
     // create diffie structures
     pMine   = DH_new();
@@ -289,12 +304,18 @@ int main( int argc, char *argv[] )
 
     if( pMine )
     {
+#ifdef DEBUG_OUTPUT
         fprintf( stdout, "[i]\tgenerating key....." );
         fflush( stdout );
+#endif
         DH_generate_key( pMine );
+#ifdef DEBUG_OUTPUT
         fprintf( stdout, "done.\n" );
+#endif
     } else {
+#ifdef DEBUG_OUTPUT
         fprintf( stdout, "[x]\tfailed to generate key.\n" );
+#endif
         return EXIT_FAILURE;
     }
 
@@ -308,7 +329,9 @@ int main( int argc, char *argv[] )
     //
     pSharedKey = BN_bn2hex( pMine->pub_key ); // ( just reusing the var )
     nSharedKey = strlen( pSharedKey );
+#ifdef DEBUG_OUTPUT
     printf( "[i]\tsending public key (%d)\n", nSharedKey );
+#endif
     write( fdSock, pSharedKey, nSharedKey );
 
     //
@@ -348,12 +371,16 @@ int main( int argc, char *argv[] )
             SHA256_Update( &ctx, pSharedKey, nSharedKey );
             SHA256_Final( pFoldedKey, &ctx );
 
+#ifdef DEBUG_OUTPUT
             fprintf( stdout, "[i]\tsuccesfully key-exchanged.\n" );
+#endif
 
             {
                 BIGNUM *pOutput = BN_bin2bn( pFoldedKey, sizeof( pFoldedKey ), NULL );
                 char   *pTextOut= BN_bn2hex( pOutput );
+#ifdef DEBUG_OUTPUT
                 fprintf( stdout, "[i]\tshared key:\n%s\n", pTextOut );
+#endif
 
                 OPENSSL_free( pTextOut );
                 BN_free( pOutput );
