@@ -434,16 +434,23 @@ int main( int argc, char *argv[] )
         close( fdSock );
     }
 
+    if( pSharedKey )
+    {
+        OPENSSL_free( pSharedKey );
+        pSharedKey = NULL;
+        nSharedKey = 0;
+    }
+
 
     if( pMine )
     {
-            DH_free( pMine );
-            pMine = NULL;
+        DH_free( pMine );
+        pMine = NULL;
     }
     if( pTheirs )
     {
-            DH_free( pTheirs );
-            pTheirs = NULL;
+        DH_free( pTheirs );
+        pTheirs = NULL;
     }
 
 
