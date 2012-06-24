@@ -149,8 +149,8 @@ int enterCommandLoop( int s, char *pKey, int nKeyLen )
 
     if( pKey && nKeyLen )
     {
-        setnonblocking( STDIN_FILENO );
-        setnonblocking( s            );
+        //setnonblocking( STDIN_FILENO );
+        //setnonblocking( s            );
 
         // use the same key in both directions
         RC4_set_key( &sEKey, nKeyLen, pKey );
