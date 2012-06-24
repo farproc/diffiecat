@@ -32,7 +32,9 @@ bool parseArgs( ARGS *pArg, int argc, char *argv[] )
 
     if( pArg && 3 == argc && argv )
     {
-            if(        0 == strcmp( argv[1], "-client" ) )
+            if(        0 == strcmp( argv[1], "-c"       ) ||
+                       0 == strcmp( argv[1], "-client"  ) ||
+                       0 == strcmp( argv[1], "--client" )    )
             {
                 // client
                 pArg->bServer   = false;
@@ -41,7 +43,9 @@ bool parseArgs( ARGS *pArg, int argc, char *argv[] )
                 pPtr            = strtok( NULL, ":" );
                 pArg->nPort     = atoi( pPtr );
                 bRetVal         = true;
-            } else if( 0 == strcmp( argv[1], "-server" ) )
+            } else if( 0 == strcmp( argv[1], "-s"       ) ||
+                       0 == strcmp( argv[1], "-server"  ) || 
+                       0 == strcmp( argv[1], "--server" )    )
             {
                 // server
                 pArg->bServer   = true;
